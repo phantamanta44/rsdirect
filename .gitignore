@@ -1,0 +1,7 @@
+# JetBrains stuff
+/.idea/
+*.ipr
+*.iml
+
+# Build Output
+/target
