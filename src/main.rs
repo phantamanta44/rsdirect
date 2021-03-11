@@ -2,12 +2,31 @@ use std::{collections::HashMap, fs::File, path::Path, str::FromStr};
 
 use clap::{App, Arg};
 use http::uri::{InvalidUri, Uri};
-use warp::{Filter, filters::BoxedFilter, redirect, Reply};
+use serde::{Deserialize, Serialize};
+use warp::{Filter, filters::{BoxedFilter, path::FullPath}, redirect, Reply};
 
-fn gen_filter(domain: &String, redir_url: &String, port: u16) -> Result<BoxedFilter<(Box<dyn Reply>, )>, InvalidUri> {
-    let redir_uri = Uri::from_str(&redir_url)?;
-    Ok(Filter::boxed(warp::host::exact(domain).or(warp::host::exact(format!("{}:{}", domain, port).as_str()))
-        .map(move |_| Box::new(redirect(redir_uri.clone())) as Box<dyn Reply>)))
+#[derive(Deserialize, Serialize)]
+struct RedirectSpec {
+    dest: String,
+    preserve_src_path: Option<bool>
+}
+
+fn gen_filter(domain: &String, spec: &RedirectSpec, port: u16) -> Result<BoxedFilter<(Box<dyn Reply>, )>, InvalidUri> {
+    let redir_src_filter = warp::host::exact(domain).or(warp::host::exact(format!("{}:{}", domain, port).as_str()));
+    let redir_uri = Uri::from_str(&spec.dest)?;
+    Ok(if spec.preserve_src_path.unwrap_or(true) {
+        // redir dest has no path, so we'll append the req path
+        Filter::boxed(redir_src_filter.and(warp::path::full()).map(move |_, p: FullPath| Box::new(redirect(
+            Uri::builder()
+                .scheme(redir_uri.scheme().unwrap().clone())
+                .authority(redir_uri.authority().unwrap().clone())
+                .path_and_query(p.as_str()) // no idea why FullPath.0 is private
+                .build().unwrap()
+        )) as Box<dyn Reply>))
+    } else {
+        // redir dest has a path, so we'll redirect straight there regardless of req path
+        Filter::boxed(redir_src_filter.map(move |_| Box::new(redirect(redir_uri.clone())) as Box<dyn Reply>))
+    })
 }
 
 #[tokio::main]
@@ -35,7 +54,7 @@ async fn main() -> Result<(), String> {
     let conf_file_name = args.value_of("CONF-FILE")
         .ok_or("No config file specified!")?;
     let conf_file = File::open(Path::new(conf_file_name)).map_err(|e| e.to_string())?;
-    let redirs: HashMap<String, String> = serde_json::from_reader(conf_file).map_err(|e| e.to_string())?;
+    let redirs: HashMap<String, RedirectSpec> = serde_json::from_reader(conf_file).map_err(|e| e.to_string())?;
 
     // generate filters
     let mut rt_filter_iter = redirs.iter()

@@ -1,3 +1,6 @@
 {
-  "cool.website.com": "https://example.com"
+  "cool.website.com": {
+    "dest": "https://example.com",
+    "preserve_src_path": false
+  }
 }
